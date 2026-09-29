@@ -1,0 +1,68 @@
+# =============================================================================
+# Debug Dockerfile — NOT for production use
+# =============================================================================
+#
+# This image includes a comprehensive debugging toolkit so you can troubleshoot
+# directly inside the running container without installing anything at runtime.
+#
+# Includes:
+#   Process:  strace, ltrace, gdb, procps (ps, top), htop
+#   Network:  tcpdump, net-tools (netstat), iproute2 (ss, ip), curl, wget,
+#             dnsutils (dig, nslookup), iputils-ping
+#   Files:    vim, less, jq, tree
+#   Python:   debugpy (VS Code/PyCharm remote debugger)
+#
+# Usage:
+#   docker build -f Dockerfile.debug -t helloapp:debug .
+#
+#   # Run locally:
+#   docker run -p 8080:8080 -p 5678:5678 helloapp:debug
+#
+#   # Deploy to K8s with the debug Helm profile:
+#   helm install helloapp-debug ./helm/helloapp \
+#     -f helm/helloapp/values-debug.yaml \
+#     --set image.tag=debug
+#
+#   # Attach VS Code debugger to port 5678, or exec in:
+#   kubectl exec -it deploy/helloapp-debug -- bash
+#
+# =============================================================================
+
+FROM python:3.11
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# ── Debugging toolkit ───────────────────────────────────────────────────────────
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    # Process inspection
+    strace ltrace gdb procps htop \
+    # Network debugging
+    tcpdump net-tools iproute2 curl wget dnsutils iputils-ping \
+    # File and text tools
+    vim less jq tree \
+    && rm -rf /var/lib/apt/lists/*
+
+# debugpy: enables VS Code / PyCharm remote debugging via DAP protocol.
+RUN pip install --no-cache-dir debugpy
+
+COPY helloapp/ ./helloapp/
+
+# Application port + debugpy remote debugger port.
+EXPOSE 8080 5678
+
+# Flask debug mode: enables interactive debugger and auto-reload.
+ENV FLASK_DEBUG=1 \
+    FLASK_ENV=development \
+    PYTHONDONTWRITEBYTECODE=1
+
+# Run via debugpy so you can attach a remote debugger.
+# - 1 worker: multiple workers would each need their own debug port.
+# - --timeout 0: no worker timeout — breakpoints pause execution indefinitely.
+# - --reload: auto-restart on code changes (useful with kubectl cp).
+CMD ["python", "-m", "debugpy", "--listen", "0.0.0.0:5678", \
+     "-m", "gunicorn", "--bind", "0.0.0.0:8080", \
+     "-w", "1", "--timeout", "0", "--reload", \
+     "--access-logfile", "-", "helloapp.app:app"]

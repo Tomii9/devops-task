@@ -1,0 +1,102 @@
+# =============================================================================
+# 💰 Cost-efficient profile
+# =============================================================================
+#
+# Minimizes spend by scaling to zero when idle and using spot instances.
+# Requires KEDA operator and KEDA HTTP add-on installed in the cluster:
+#   helm repo add kedacore https://kedacore.github.io/charts
+#   helm install keda kedacore/keda --namespace keda --create-namespace
+#   helm install keda-http kedacore/keda-add-ons-http --namespace keda
+#
+# Cost model:
+#   - Zero traffic: 0 pods → $0/month
+#   - Low traffic:  1 pod  → ~$1-2/month (spot pricing)
+#   - Peak traffic: 5 pods → ~$5-10/month (spot pricing)
+#
+# Trade-off: ~5s cold start on the first request after an idle period.
+#
+# Usage:
+#   helm install helloapp ./helm/helloapp \
+#     -f helm/helloapp/values-cost.yaml
+#
+# =============================================================================
+
+replicaCount: 1
+
+gunicorn:
+  workers: 2
+  workerClass: sync
+  threads: 1
+  keepAlive: 5
+  timeout: 30
+  gracefulTimeout: 15    # Fast shutdown to release resources quickly
+
+# Tiny resource requests — don't reserve what you don't use.
+# A Flask hello-world app uses ~20MB of memory at idle.
+resources:
+  requests:
+    cpu: "25m"           # 1/40th of a core
+    memory: "32Mi"
+  limits:
+    cpu: "200m"
+    memory: "128Mi"
+
+# HPA disabled — KEDA handles scaling (including to zero).
+autoscaling:
+  enabled: false
+
+# KEDA: scale to zero when no traffic.
+# Uses KEDA HTTP Add-on interceptor to enable true 0-to-N scaling on HTTP requests.
+keda:
+  enabled: true
+  minReplicaCount: 0     # Zero pods when idle = $0 compute
+  maxReplicaCount: 5
+  cooldownPeriod: 300    # Wait 5 minutes of inactivity before scaling to zero
+  http:
+    enabled: true
+    pathPrefixes:
+      - /
+
+# No PDB — accept brief downtime to minimize cost.
+pdb:
+  enabled: false
+
+# No network policy — simplicity over security for cost profile.
+networkPolicy:
+  enabled: false
+
+# Spot/preemptible node tolerations — 60-90% cheaper than on-demand.
+tolerations:
+  # Google Kubernetes Engine (GKE)
+  - key: "cloud.google.com/gke-spot"
+    operator: "Equal"
+    value: "true"
+    effect: "NoSchedule"
+  # Azure Kubernetes Service (AKS)
+  - key: "kubernetes.azure.com/scalesetpriority"
+    operator: "Equal"
+    value: "spot"
+    effect: "NoSchedule"
+  # Amazon Elastic Kubernetes Service (EKS)
+  - key: "eks.amazonaws.com/capacityType"
+    operator: "Equal"
+    value: "SPOT"
+    effect: "NoSchedule"
+
+terminationGracePeriodSeconds: 15
+preStopSleepSeconds: 0
+
+# Ingress tuned for cost efficiency:
+# - Shared Ingress controller saves ~$20/month per service compared to cloud LoadBalancer
+# - Host-based routing on single shared entrypoint
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    kubernetes.io/ingress.class: nginx
+  hosts:
+    - host: helloapp-cost.local
+      paths:
+        - path: /
+          pathType: Prefix
+

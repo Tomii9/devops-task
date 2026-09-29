@@ -1,0 +1,113 @@
+# =============================================================================
+# 🛡️ Fault tolerance profile
+# =============================================================================
+#
+# Designed to survive full availability zone failures transparently.
+# Requires a multi-zone cluster (3+ availability zones).
+#
+# Key techniques:
+#   - Hard zone anti-affinity: pods MUST be in different AZs
+#   - PDB minAvailable: 2 — blocks disruptive maintenance below 2 pods
+#   - preStop sleep: prevents dropped requests during pod termination
+#   - Graceful shutdown: finishes in-flight requests before dying
+#
+# Usage:
+#   helm install helloapp ./helm/helloapp \
+#     -f helm/helloapp/values-fault-tolerance.yaml
+#
+# =============================================================================
+
+replicaCount: 3          # One per zone — survives 1 zone going down
+
+gunicorn:
+  workers: 4
+  workerClass: sync
+  threads: 1
+  keepAlive: 5
+  timeout: 30
+  gracefulTimeout: 30    # Wait 30s for in-flight requests on shutdown
+
+resources:
+  requests:
+    cpu: "100m"
+    memory: "64Mi"
+  limits:
+    cpu: "500m"
+    memory: "256Mi"
+
+autoscaling:
+  enabled: true
+  minReplicas: 3         # Never drop below 3 (one per zone)
+  maxReplicas: 9         # 3 per zone
+  targetCPUUtilization: 60
+  targetMemoryUtilization: 80
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Pods
+          value: 3       # Scale in multiples of 3 (one per zone)
+          periodSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: 600   # 10 min cooldown for stability
+      policies:
+        - type: Pods
+          value: 3
+          periodSeconds: 120
+
+pdb:
+  enabled: true
+  minAvailable: 2        # At least 2 pods always running
+
+# HARD zone anti-affinity: pods MUST be in different availability zones.
+# If a zone is full, the pod is NOT scheduled (unlike "preferred").
+podAntiAffinity:
+  enabled: true
+  type: required
+  topologyKey: topology.kubernetes.io/zone
+
+# Even distribution across zones as a second layer of protection.
+topologySpread:
+  enabled: true
+  maxSkew: 1
+  topologyKey: topology.kubernetes.io/zone
+  whenUnsatisfiable: DoNotSchedule
+
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 0
+    maxUnavailable: 1    # Rotate 1 zone at a time (respects PDB minAvailable: 2 without zone anti-affinity deadlock)
+
+# ── Graceful shutdown (the tricky part most people get wrong) ─────────────────
+#
+# The problem:
+#   Kubernetes sends SIGTERM and removes the pod from Service endpoints
+#   CONCURRENTLY, not sequentially. Without a preStop delay, the pod may
+#   receive new requests AFTER Gunicorn starts shutting down → 502 errors.
+#
+# The solution:
+#   preStopSleepSeconds: 10 → pod sleeps 10s before Gunicorn gets SIGTERM
+#   During this 10s, the endpoints controller removes the pod from the
+#   Service, so no new requests arrive.
+#
+# Total shutdown budget: 10s preStop + 30s gracefulTimeout + 5s buffer = 45s
+terminationGracePeriodSeconds: 45
+preStopSleepSeconds: 10
+
+# Ingress tuned for zero dropped requests during pod/zone failures:
+# - Transparently retries failed requests (502, 503, 504, timeout) on another replica
+# - Upstream retry limits and timeouts
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-next-upstream: "error timeout invalid_header http_502 http_503 http_504"
+    nginx.ingress.kubernetes.io/proxy-next-upstream-tries: "3"
+    nginx.ingress.kubernetes.io/proxy-next-upstream-timeout: "10"
+  hosts:
+    - host: helloapp-ha.local
+      paths:
+        - path: /
+          pathType: Prefix
+

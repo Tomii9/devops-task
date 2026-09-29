@@ -1,0 +1,83 @@
+# =============================================================================
+# 📈 Scalability & throughput profile
+# =============================================================================
+#
+# Optimized for maximum requests/second with aggressive auto-scaling.
+# Uses gevent async workers for high concurrency per pod.
+#
+# Theoretical capacity:
+#   8 workers × 1000 connections × 50 pods = 400,000 concurrent connections
+#
+# Usage:
+#   helm install helloapp ./helm/helloapp \
+#     -f helm/helloapp/values-scalability.yaml
+#
+# =============================================================================
+
+replicaCount: 2
+
+gunicorn:
+  workers: 8             # High worker count for parallel request processing
+  workerClass: gevent    # Async workers: each handles 1000 concurrent connections
+  threads: 1             # gevent uses green threads, not OS threads
+  keepAlive: 5
+  timeout: 30
+  gracefulTimeout: 30
+
+resources:
+  requests:
+    cpu: "200m"
+    memory: "128Mi"
+  limits:
+    cpu: "1000m"         # Allow burst to 1 full core for request spikes
+    memory: "256Mi"
+
+autoscaling:
+  enabled: true
+  minReplicas: 2         # Always 2 for baseline availability
+  maxReplicas: 50        # Handle massive traffic spikes
+  targetCPUUtilization: 60
+  targetMemoryUtilization: ""
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 30    # React fast to load spikes
+      policies:
+        - type: Percent
+          value: 100                     # Double pods each scaling event
+          periodSeconds: 30
+    scaleDown:
+      stabilizationWindowSeconds: 300   # Cool down slowly to avoid flapping
+      policies:
+        - type: Percent
+          value: 25
+          periodSeconds: 60
+
+pdb:
+  enabled: true
+  minAvailable: 1
+
+# Spread pods across nodes so throughput scales with node count.
+podAntiAffinity:
+  enabled: true
+  type: preferred        # Best-effort — don't block scheduling if nodes are full
+  topologyKey: kubernetes.io/hostname
+
+terminationGracePeriodSeconds: 30
+preStopSleepSeconds: 5   # Brief delay for endpoint removal
+
+# Ingress tuned for high concurrency and throughput:
+# - least_conn load balancing distributes traffic evenly across async gevent workers
+# - Client body buffer tuning for high request volume
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/load-balance: "least_conn"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "5"
+    nginx.ingress.kubernetes.io/client-body-buffer-size: "128k"
+  hosts:
+    - host: helloapp-scalability.local
+      paths:
+        - path: /
+          pathType: Prefix
+

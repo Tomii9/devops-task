@@ -1,0 +1,194 @@
+# =============================================================================
+# Default values for helloapp (balanced profile)
+# =============================================================================
+#
+# This is the baseline configuration — a sensible starting point for most
+# environments. Override with profile-specific values files for optimization:
+#
+#   helm install helloapp ./helm/helloapp                                    # balanced
+#   helm install helloapp ./helm/helloapp -f helm/helloapp/values-debug.yaml # debug
+#   helm install helloapp ./helm/helloapp -f helm/helloapp/values-scalability.yaml
+#   helm install helloapp ./helm/helloapp -f helm/helloapp/values-latency.yaml
+#   helm install helloapp ./helm/helloapp -f helm/helloapp/values-fault-tolerance.yaml
+#   helm install helloapp ./helm/helloapp -f helm/helloapp/values-cost.yaml
+#
+# =============================================================================
+
+replicaCount: 2
+
+image:
+  repository: helloapp
+  tag: latest
+  pullPolicy: IfNotPresent
+
+# -- Gunicorn configuration (injected as environment variables)
+# Different profiles tune these for their optimization target.
+gunicorn:
+  workers: 2
+  workerClass: sync
+  threads: 1
+  keepAlive: 5
+  timeout: 30
+  gracefulTimeout: 30
+
+# -- Additional environment variables injected into the container
+extraEnv: []
+  # - name: FLASK_DEBUG
+  #   value: "1"
+
+# -- Service configuration
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8080
+
+# -- Ingress configuration (disabled by default)
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+    # kubernetes.io/ingress.class: nginx
+    # cert-manager.io/cluster-issuer: letsencrypt-prod
+  hosts:
+    - host: helloapp.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+    # - secretName: helloapp-tls
+    #   hosts:
+    #     - helloapp.local
+
+
+# -- Resource requests and limits
+# Requests = guaranteed resources (used for scheduling).
+# Limits = hard ceiling (pod is OOM-killed or CPU-throttled beyond this).
+resources:
+  requests:
+    cpu: "100m"
+    memory: "64Mi"
+  limits:
+    cpu: "500m"
+    memory: "256Mi"
+
+# -- Horizontal Pod Autoscaler (autoscaling/v2)
+autoscaling:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 10
+  targetCPUUtilization: 70
+  targetMemoryUtilization: 80
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Percent
+          value: 50
+          periodSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Percent
+          value: 25
+          periodSeconds: 60
+
+# -- KEDA ScaledObject (scale-to-zero support)
+# Requires KEDA operator installed in the cluster.
+# When enabled, HPA is disabled automatically.
+keda:
+  enabled: false
+  minReplicaCount: 0
+  maxReplicaCount: 5
+  cooldownPeriod: 300
+  http:
+    enabled: false
+    hosts: []
+    pathPrefixes:
+      - /
+  triggers: []
+
+
+# -- Pod Disruption Budget
+pdb:
+  enabled: true
+  minAvailable: 1
+
+# -- Network Policy (restricts ingress to labeled pods only)
+networkPolicy:
+  enabled: true
+
+# -- Service Account
+serviceAccount:
+  create: true
+  name: ""
+  # Disable auto-mounting the SA token to prevent token theft
+  # from compromised pods. Most apps don't need the K8s API.
+  automountServiceAccountToken: false
+
+# -- Pod-level security context
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+
+# -- Container-level security context
+containerSecurityContext:
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+
+# -- Liveness probe (restarts unhealthy containers)
+livenessProbe:
+  enabled: true
+  httpGet:
+    path: /
+    port: 8080
+  initialDelaySeconds: 10
+  periodSeconds: 15
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+# -- Readiness probe (removes unready pods from Service endpoints)
+readinessProbe:
+  enabled: true
+  httpGet:
+    path: /
+    port: 8080
+  initialDelaySeconds: 5
+  periodSeconds: 10
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+# -- Deployment strategy
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
+
+# -- Graceful shutdown configuration
+terminationGracePeriodSeconds: 30
+# Seconds to sleep in preStop hook before Gunicorn receives SIGTERM.
+# Gives the endpoints controller time to remove the pod from the Service.
+preStopSleepSeconds: 0
+
+# -- Topology spread (distributes pods across zones/nodes)
+topologySpread:
+  enabled: false
+  maxSkew: 1
+  topologyKey: topology.kubernetes.io/zone
+  whenUnsatisfiable: DoNotSchedule
+
+# -- Pod anti-affinity (prevents co-location)
+podAntiAffinity:
+  enabled: false
+  # "preferred" = best-effort spread; "required" = hard constraint
+  type: preferred
+  topologyKey: kubernetes.io/hostname
+
+# -- Tolerations, node selectors
+tolerations: []
+nodeSelector: {}

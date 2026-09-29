@@ -1,0 +1,89 @@
+# =============================================================================
+# 🔧 Debug profile
+# =============================================================================
+#
+# Wide-open security, no scaling, no probes — designed for live debugging.
+# Use with Dockerfile.debug for the full debugging toolkit.
+#
+# Usage:
+#   helm install helloapp-debug ./helm/helloapp \
+#     -f helm/helloapp/values-debug.yaml \
+#     --set image.tag=debug
+#
+# =============================================================================
+
+replicaCount: 1
+
+gunicorn:
+  workers: 1            # Single worker — multiple workers complicate debugging
+  workerClass: sync
+  threads: 1
+  keepAlive: 5
+  timeout: 0            # No timeout — breakpoints pause execution indefinitely
+  gracefulTimeout: 5
+
+extraEnv:
+  - name: FLASK_DEBUG
+    value: "1"
+  - name: FLASK_ENV
+    value: "development"
+
+# Generous limits instead of none — prevents runaway processes from killing the
+# node, while still being high enough to never interfere with debugging.
+resources:
+  requests:
+    cpu: "10m"
+    memory: "32Mi"
+  limits:
+    cpu: "4000m"
+    memory: "4Gi"
+
+autoscaling:
+  enabled: false
+
+pdb:
+  enabled: false
+
+networkPolicy:
+  enabled: false        # Allow all traffic for easy debugging access
+
+# Security is intentionally loosened for debugging.
+podSecurityContext:
+  runAsNonRoot: false
+
+containerSecurityContext:
+  readOnlyRootFilesystem: false
+  allowPrivilegeEscalation: true
+  # Privileged mode required for strace, ptrace, tcpdump.
+  privileged: true
+  capabilities:
+    add:
+      - SYS_PTRACE      # strace, gdb attach
+      - NET_RAW          # tcpdump raw packet capture
+      - NET_ADMIN        # network interface configuration
+
+# Probes disabled — they restart/remove the pod while you're debugging.
+livenessProbe:
+  enabled: false
+readinessProbe:
+  enabled: false
+
+terminationGracePeriodSeconds: 5
+preStopSleepSeconds: 0
+
+# Ingress configured for debugging:
+# - Extended 1-hour proxy timeouts so stepping through code with breakpoints
+#   does NOT drop connection with 504 Gateway Timeout
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "3600"
+  hosts:
+    - host: helloapp-debug.local
+      paths:
+        - path: /
+          pathType: Prefix
+

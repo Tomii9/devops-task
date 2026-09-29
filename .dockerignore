@@ -1,0 +1,27 @@
+# Exclude everything not needed in the Docker build context.
+# Keeps builds fast and prevents secrets/configs from leaking into images.
+
+.git
+.gitignore
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.egg-info
+
+# CI/CD, Helm, and Kubernetes manifests are not part of the runtime.
+.github/
+helm/
+k8s/
+
+# Documentation and dev scripts.
+README.md
+LICENSE
+build.sh
+run.sh
+test.sh
+
+# Docker files themselves.
+Dockerfile
+Dockerfile.debug
+.dockerignore

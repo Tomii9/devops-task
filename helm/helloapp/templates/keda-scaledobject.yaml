@@ -1,0 +1,51 @@
+{{- if .Values.keda.enabled }}
+{{- if and .Values.keda.http .Values.keda.http.enabled }}
+# KEDA HTTPScaledObject — scales HTTP workloads from 0 to N based on incoming traffic.
+# Uses the KEDA HTTP Add-on interceptor to catch requests, hold them while scaling up (cold start),
+# and route to the pod once ready. When traffic ceases, scales down to 0 for $0 idle cost.
+apiVersion: http.keda.sh/v1alpha1
+kind: HTTPScaledObject
+metadata:
+  name: {{ include "helloapp.fullname" . }}
+  labels:
+    {{- include "helloapp.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    name: {{ include "helloapp.fullname" . }}
+    service: {{ include "helloapp.fullname" . }}
+    port: {{ .Values.service.port }}
+  replicas:
+    min: {{ .Values.keda.minReplicaCount }}
+    max: {{ .Values.keda.maxReplicaCount }}
+  scaledownPeriod: {{ .Values.keda.cooldownPeriod }}
+  {{- with .Values.keda.http.hosts }}
+  hosts:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .Values.keda.http.pathPrefixes }}
+  pathPrefixes:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- else }}
+# KEDA ScaledObject — enables event-driven autoscaling and scale-to-zero.
+# Requires KEDA operator installed in the cluster.
+# When minReplicaCount is 0, KEDA terminates all pods after the
+# cooldownPeriod, and activates a new pod when a trigger fires.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ include "helloapp.fullname" . }}
+  labels:
+    {{- include "helloapp.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    name: {{ include "helloapp.fullname" . }}
+  minReplicaCount: {{ .Values.keda.minReplicaCount }}
+  maxReplicaCount: {{ .Values.keda.maxReplicaCount }}
+  cooldownPeriod: {{ .Values.keda.cooldownPeriod }}
+  {{- with .Values.keda.triggers }}
+  triggers:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,133 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "helloapp.fullname" . }}
+  labels:
+    {{- include "helloapp.labels" . | nindent 4 }}
+spec:
+  {{- if and (not .Values.autoscaling.enabled) (not .Values.keda.enabled) }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "helloapp.selectorLabels" . | nindent 6 }}
+  {{- with .Values.strategy }}
+  strategy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  template:
+    metadata:
+      labels:
+        {{- include "helloapp.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- if .Values.serviceAccount.create }}
+      serviceAccountName: {{ include "helloapp.serviceAccountName" . }}
+      {{- end }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      containers:
+        - name: {{ .Chart.Name }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.targetPort }}
+              protocol: TCP
+          env:
+            - name: GUNICORN_WORKERS
+              value: {{ .Values.gunicorn.workers | quote }}
+            - name: GUNICORN_WORKER_CLASS
+              value: {{ .Values.gunicorn.workerClass | quote }}
+            - name: GUNICORN_THREADS
+              value: {{ .Values.gunicorn.threads | quote }}
+            - name: GUNICORN_KEEP_ALIVE
+              value: {{ .Values.gunicorn.keepAlive | quote }}
+            - name: GUNICORN_TIMEOUT
+              value: {{ .Values.gunicorn.timeout | quote }}
+            - name: GUNICORN_GRACEFUL_TIMEOUT
+              value: {{ .Values.gunicorn.gracefulTimeout | quote }}
+            {{- range .Values.extraEnv }}
+            - name: {{ .name }}
+              value: {{ .value | quote }}
+            {{- end }}
+          {{- with .Values.containerSecurityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- if .Values.livenessProbe.enabled }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.livenessProbe.httpGet.path }}
+              port: {{ .Values.livenessProbe.httpGet.port }}
+            initialDelaySeconds: {{ .Values.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.livenessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.livenessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.livenessProbe.failureThreshold }}
+          {{- end }}
+          {{- if .Values.readinessProbe.enabled }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.readinessProbe.httpGet.path }}
+              port: {{ .Values.readinessProbe.httpGet.port }}
+            initialDelaySeconds: {{ .Values.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.readinessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.readinessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.readinessProbe.failureThreshold }}
+          {{- end }}
+          {{- if gt (int .Values.preStopSleepSeconds) 0 }}
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep {{ .Values.preStopSleepSeconds }}"]
+          {{- end }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      {{- /* ── Pod anti-affinity ────────────────────────────────────────── */}}
+      {{- if .Values.podAntiAffinity.enabled }}
+      affinity:
+        podAntiAffinity:
+          {{- if eq .Values.podAntiAffinity.type "required" }}
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: {{ .Values.podAntiAffinity.topologyKey }}
+              labelSelector:
+                matchLabels:
+                  {{- include "helloapp.selectorLabels" . | nindent 18 }}
+          {{- else }}
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: {{ .Values.podAntiAffinity.topologyKey }}
+                labelSelector:
+                  matchLabels:
+                    {{- include "helloapp.selectorLabels" . | nindent 20 }}
+          {{- end }}
+      {{- end }}
+      {{- /* ── Topology spread constraints ──────────────────────────────── */}}
+      {{- if .Values.topologySpread.enabled }}
+      topologySpreadConstraints:
+        - maxSkew: {{ .Values.topologySpread.maxSkew }}
+          topologyKey: {{ .Values.topologySpread.topologyKey }}
+          whenUnsatisfiable: {{ .Values.topologySpread.whenUnsatisfiable }}
+          labelSelector:
+            matchLabels:
+              {{- include "helloapp.selectorLabels" . | nindent 14 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

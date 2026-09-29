@@ -1,0 +1,14 @@
+apiVersion: v2
+name: helloapp
+description: |
+  Helm chart for the Formlabs helloapp Flask application.
+  Supports multiple deployment profiles via values overrides:
+    - values.yaml              (default / balanced)
+    - values-debug.yaml        (debugging with full toolkit)
+    - values-scalability.yaml  (max throughput, HPA 2→50)
+    - values-latency.yaml      (min response time, Guaranteed QoS)
+    - values-fault-tolerance.yaml (survive AZ failures)
+    - values-cost.yaml         (scale-to-zero with KEDA)
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
